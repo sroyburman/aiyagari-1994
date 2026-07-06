@@ -1,16 +1,30 @@
 ```python
-# Load standard libraries
+# ============================================================
+# Imports
+# ============================================================
+
+# Standard numerical libraries
 import time
 import numpy as np
 import matplotlib.pyplot as plt
+
+# Performance optimization
 from numba.experimental import jitclass
 from numba import jit, njit, prange, float64, int32
-# Load add-on libraries
+
+# Numerical optimization and interpolation
 from quantecon.optimize.scalar_maximization import brent_max
 from interpolation import interp
 ```
 
 ```python
+# ============================================================
+# Aiyagari Model Class
+# ============================================================
+# Stores all structural parameters defining the household and
+# firm environment. Using a jitclass allows Numba to compile
+# the model efficiently for faster numerical computation.
+
 data_type = [
     ('bet', float64),
     ('mu', float64),
@@ -30,8 +44,21 @@ class aiyagari94:
 ```
 
 ```python
+# ============================================================
+# Bellman Objective Function
+# ============================================================
+# Computes the value of choosing next-period assets (kp)
+# given the current state (resources x and productivity z).
+#
+# The function evaluates:
+#   current utility
+# + discounted expected continuation value
+#
+# This objective is repeatedly maximized during value function
+# iteration.
+
 @njit
-def obj_fnc(kp, r, w, ix, iz, x_vec, V_mat, aiyagari94_class):
+def bellman_objective(kp, r, w, ix, iz, x_vec, V_mat, aiyagari94_class):
   bet = aiyagari94_class.bet
   mu = aiyagari94_class.mu
   b = aiyagari94_class.b
@@ -57,9 +84,21 @@ def obj_fnc(kp, r, w, ix, iz, x_vec, V_mat, aiyagari94_class):
 
   W = u + bet*EV
   return W
+```
+
+```python
+# ============================================================
+# Value Function Iteration
+# ============================================================
+# Solves the household optimization problem by repeatedly
+# updating the Bellman equation until convergence.
+#
+# Outputs:
+#   - Optimal value function
+#   - Optimal savings policy function
 
 @njit(parallel=True)
-def Vnew_mat_fnc(r, w, x_vec, Vold_mat, aiyagari94_class):
+def update_value_function(r, w, x_vec, Vold_mat, aiyagari94_class):
     Nx = len(x_vec)
     Nz = len(aiyagari94_class.Z)
 
@@ -83,7 +122,7 @@ def Vnew_mat_fnc(r, w, x_vec, Vold_mat, aiyagari94_class):
                 if kp > x:
                     break
 
-                val = obj_fnc(kp, r, w, ix, iz, x_vec, Vold_mat, aiyagari94_class)
+                val = bellman_objective(kp, r, w, ix, iz, x_vec, Vold_mat, aiyagari94_class)
 
                 if val > best_val:
                     best_val = val
@@ -95,13 +134,13 @@ def Vnew_mat_fnc(r, w, x_vec, Vold_mat, aiyagari94_class):
     return Vnew_mat, Gnew_kp_mat
 
 @njit
-def VFI_fnc(r, w, x_vec, V0_mat, aiyagari94_class, eps_v, max_iter, display):
+def value_function_iteration(r, w, x_vec, V0_mat, aiyagari94_class, eps_v, max_iter, display):
   V_mat = V0_mat.copy()
   iter_count = 0
   stop_crit = eps_v + 1
 
   while (stop_crit > eps_v) and (iter_count < max_iter):
-    Vnew_mat, G_kp_mat = Vnew_mat_fnc(r, w, x_vec, V_mat, aiyagari94_class)
+    Vnew_mat, G_kp_mat = update_value_function(r, w, x_vec, V_mat, aiyagari94_class)
     stop_crit = np.max(np.abs(Vnew_mat - V_mat))
     V_mat = Vnew_mat.copy()
     iter_count += 1
@@ -109,9 +148,20 @@ def VFI_fnc(r, w, x_vec, V0_mat, aiyagari94_class, eps_v, max_iter, display):
   return V_mat, G_kp_mat
 ```
 
+
 ```python
-def simulate_fnc(r, w, zt, x_vec, V0_mat, max_iter_v, eps_v, aiyagari94_class):
-  V_mat, kp_hat_mat = VFI_fnc(r, w, x_vec, V0_mat, aiyagari94_class, eps_v, max_iter_v, False)
+# ============================================================
+# Household Simulation
+# ============================================================
+# Simulates household decisions using the computed policy
+# function and a sequence of productivity shocks.
+#
+# Returns simulated paths for:
+#   - Total resources
+#   - Asset holdings
+
+def simulate_households(r, w, zt, x_vec, V0_mat, max_iter_v, eps_v, aiyagari94_class):
+  V_mat, kp_hat_mat = value_function_iteration(r, w, x_vec, V0_mat, aiyagari94_class, eps_v, max_iter_v, False)
 
   b = aiyagari94_class.b
   Z = aiyagari94_class.Z
@@ -133,7 +183,13 @@ def simulate_fnc(r, w, zt, x_vec, V0_mat, max_iter_v, eps_v, aiyagari94_class):
 ```
 
 ```python
-def discrete_realization(rand_num,cdf):
+# ============================================================
+# Markov Chain Utilities
+# ============================================================
+# Generates stationary distributions and simulated productivity
+# paths used throughout the equilibrium computation.
+
+def draw_markov_state(rand_num,cdf):
     i = 0
     while rand_num>cdf[i]:
         i+=1
@@ -191,7 +247,7 @@ class markov_chain:
         # Step 5:
         for t in range(Nt):
             # Get realization
-            s = discrete_realization(rand_num=rand_unif[t],cdf=cdf)
+            s = draw_markov_state(rand_num=rand_unif[t],cdf=cdf)
 
             # Transform to actual state value
             x[t] =  self.S[s]
@@ -203,7 +259,20 @@ class markov_chain:
 ```
 
 ```python
-def compute_equil(r0, zt, x_vec, V0_mat, max_iter_v, eps_v, max_iter_r, eps_r, aiyagari94_class):
+# ============================================================
+# General Equilibrium Solver
+# ============================================================
+# Uses bisection to find the equilibrium interest rate.
+#
+# At each candidate interest rate:
+#   1. Solve the household problem.
+#   2. Simulate household savings.
+#   3. Compute aggregate capital supply.
+#   4. Compare supply with firm demand.
+#
+# The algorithm stops when excess demand is approximately zero.
+
+def compute_equilibrium(r0, zt, x_vec, V0_mat, max_iter_v, eps_v, max_iter_r, eps_r, aiyagari94_class):
   alph = aiyagari94_class.alph
   delt = aiyagari94_class.delt
   bet = aiyagari94_class.bet
@@ -215,7 +284,7 @@ def compute_equil(r0, zt, x_vec, V0_mat, max_iter_v, eps_v, max_iter_r, eps_r, a
   w0 = (1-alph)*K0**(alph)
 
   phi0 = min(b,w0*Z[0]/r0)
-  V_mat, kp_hat_mat, xt, kt_hat = simulate_fnc(r0, w0, zt, x_vec, V0_mat, max_iter_v, eps_v, aiyagari94_class)
+  V_mat, kp_hat_mat, xt, kt_hat = simulate_households(r0, w0, zt, x_vec, V0_mat, max_iter_v, eps_v, aiyagari94_class)
   Ks = np.mean(kt_hat) - phi0
   r1 = alph * Ks**(alph-1) - delt
 
@@ -231,7 +300,7 @@ def compute_equil(r0, zt, x_vec, V0_mat, max_iter_v, eps_v, max_iter_r, eps_r, a
     w = (1-alph)*Kd**alph
 
     phi = min(b,w*Z[0]/r)
-    V_mat, kp_hat_mat, xt, kt_hat = simulate_fnc(r, w, zt, x_vec, V_mat, max_iter_v, eps_v, aiyagari94_class)
+    V_mat, kp_hat_mat, xt, kt_hat = simulate_households(r, w, zt, x_vec, V_mat, max_iter_v, eps_v, aiyagari94_class)
 
     Ks = np.mean(kt_hat) - phi
     excess_demand = Kd - Ks
@@ -302,15 +371,20 @@ r = 0.035857
 K = ((r + δ) / α) ** (1 / (α - 1))
 w = (1 - α) * K ** α
 
-# YOUR CODE HERE
 V0_mat = np.zeros((Nx,len(Z)))
 start_time = time.time()
-V_mat, G_kp_mat = VFI_fnc(r, w, x_vec, V0_mat, e1, eps_v, max_iter_v, False)
+V_mat, G_kp_mat = value_function_iteration(r, w, x_vec, V0_mat, e1, eps_v, max_iter_v, False)
 end_time = time.time()
 print('VFI took: ' + str(end_time-start_time) + ' seconds')
 ```
 
 ```python
+# ============================================================
+# Figure 1: Household Policy Functions
+# ============================================================
+# Plot optimal savings decisions for low- and high-productivity
+# households.
+
 plt.figure(figsize=(10, 6))
 plt.plot(x_vec, G_kp_mat[:, 0], label=f'$z_{{min}}$ = {Z[0]:.3f}', linewidth=2)
 plt.plot(x_vec, G_kp_mat[:, -1], label=f'$z_{{max}}$ = {Z[-1]:.3f}', linewidth=2)
@@ -346,7 +420,7 @@ for i, r in enumerate(r_vec):
   w = (1 - α) * Kd ** α
 
   phi = min(b, w * Z[0] / r)
-  V_mat, kp_hat_mat, xt, kt_hat = simulate_fnc(r, w, zt, x_vec, V0_mat, max_iter_v, eps_v, e1)
+  V_mat, kp_hat_mat, xt, kt_hat = simulate_households(r, w, zt, x_vec, V0_mat, max_iter_v, eps_v, e1)
   Ks = np.mean(kt_hat) - phi
 
   Kd_vec[i] = Kd
@@ -356,6 +430,12 @@ for i, r in enumerate(r_vec):
 ```
 
 ```python
+# ============================================================
+# Figure 2: Aggregate Capital Market
+# ============================================================
+# Compare aggregate capital demand from firms with aggregate
+# capital supply from households across interest rates.
+
 plt.figure(figsize=(10, 6))
 plt.plot(Kd_vec, r_vec, 'b-', linewidth=2, label='Capital Demand ($K_d$)')
 plt.plot(Ks_vec, r_vec, 'r-', linewidth=2, label='Capital Supply ($K_s$)')
@@ -382,7 +462,7 @@ mc = markov_chain(Z, Pi)
 mc.stationary_dist()
 zt = mc.sample_path(mc.p, Nsim)
 V0_mat = np.zeros((len(x_vec), len(Z)))
-r_e, V_mat, kp_hat_mat, xt, kt_hat = compute_equil(r0, zt, x_vec, V0_mat, max_iter_v, eps_v, max_iter_r, eps_r, e1)
+r_e, V_mat, kp_hat_mat, xt, kt_hat = compute_equilibrium(r0, zt, x_vec, V0_mat, max_iter_v, eps_v, max_iter_r, eps_r, e1)
 print(f"Equilibrium interest rate: r = {r_e:.4f}")
 print(f"Compare to Aiyagari (1994) Table II: r ≈ 0.0359")
 ```
@@ -424,6 +504,12 @@ gini_y = gini_coefficient(yt)
 ```
 
 ```python
+# ============================================================
+# Figure 3: Lorenz Curves
+# ============================================================
+# Measure inequality in equilibrium consumption, wealth,
+# and income using Lorenz curves and Gini coefficients.
+
 plt.figure(figsize=(10, 6))
 plt.plot([0, 1], [0, 1], 'k--', alpha=0.5, label='Perfect Equality')
 plt.plot(pop_c, lorenz_c, linewidth=2, label=f'Consumption (Gini = {gini_c:.3f})')
