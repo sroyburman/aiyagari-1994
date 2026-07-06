@@ -77,3 +77,126 @@ Labor productivity follows a discretized AR(1) process approximated with Tauchen
 
 ## Parameters
 
+Benchmark household parameters:
+
+| Parameter | Value |
+|----------|------:|
+| Discount factor $\beta$ | 0.96 |
+| Risk aversion $\mu$ | 5.0 |
+| Borrowing constraint $b$ | 0.0 |
+
+Firm parameters:
+
+| Parameter | Value |
+|----------|------:|
+| Capital share $\alpha$ | 0.36 |
+| Depreciation $\delta$ | 0.08 |
+
+Labor productivity process:
+
+```python
+rho = 0.6
+sigma = 0.2
+n_states = 7
+```
+
+## Computational Approach
+
+This implementation consists of several main components.
+
+### 1. Productivity Process
+
+Labor productivity is modeled as an AR(1) process and discretized into a finite-state Markov chain using Tauchen's method.
+
+### 2. Household Problem
+
+Given an interest rate and wage, the household dynamic programming problem is solved using value function iteration.
+
+The code uses:
+
+- Asset/resource grids
+- Interpolation
+- Discrete search over next-period assets
+- Numba JIT compilation
+- Parallelized loops
+
+### 3. Simulation
+
+After solving the household problem, the model simulates a long path of productivity shocks and household asset choices. This generates simulated series' for:
+
+- Total resources
+- Asset holdings
+- Consumption
+- Income
+
+### 4. Capital Supply and Demand
+
+For a grid of interest rates, the model computes:
+
+- Household capital supply from simulated savings behavior
+- Firm capital demand from the production function
+
+The intersection of capital supply and demand determines the general equilibrium interest rate.
+
+### 5. Equilibrium Computation
+
+The equilibrium interest rate is solved using bisection. At each candidate interest rate, the model solves the household problem, simulates capital holdings, and compares capital supply to firm capital demand. 
+
+### 6. Inequality Analysis
+
+Using the simulated equilibrium allocation, the project computes Lorenz curves and Gini coefficients for:
+
+- Consumption
+- Wealth
+- Income
+
+## Results
+
+The project produces numerous key outputs:
+
+1. Optimal household savings policy functions
+2. Aggregate capital supply and demand curves
+3. General equilibrium interest rate
+4. Simulated household wealth, consumption, and income distributions
+5. Lorenz curves and Gini coefficients
+
+For the benchmark calibration, the computed equilibrium interest rate is close to the value reported in Aiyagari (1994) Table II.
+
+## Visualizations
+
+The repository includes depictions of:
+
+- Optimal policy functions
+- Aggregate supply and demand curves
+- Lorenz curves for consumption, wealth, and income
+
+## Skills Demonstrated
+
+- Python programming
+- Object-oriented programming
+- Dynamic Programming
+- Value function iteration
+- Macroeconomic modeling
+- Bisection root-finding
+- Markov chains
+- Tauchen discretization
+- Interpolation
+- Numba acceleration
+
+## Packages Used
+
+`numpy`; `matplotlib`; `numba`; `quantecon`; `interpolation`
+
+## Potential Extenstions
+
+Possible future improvements include:
+
+- Adding alternative borrowing constraints
+- Computing different risk aversion values
+- Refactoring into separate model, solver, simulation, and plotting modules
+- Computing the stationary distribution directly rather than through simulation
+- Adding convergence diagnostics for value function iteration
+
+## References
+
+Aiyagari, S. Rao. (1994). _Uninsured Idiosyncratic Risk and Aggregate Saving_. Quarterly Journal of Economics, 109(3), 659–684.
