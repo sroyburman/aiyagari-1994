@@ -187,7 +187,7 @@ The repository includes depictions of:
 
 `numpy`; `matplotlib`; `numba`; `quantecon`; `interpolation`
 
-## Potential Extenstions
+## Potential Extensions
 
 Possible future improvements include:
 
